@@ -7,7 +7,8 @@ A small Python wrapper around [`sldl` (slsk-batchdl)](https://github.com/fiso64/
 ## Requirements
 
 - macOS or Linux
-- Python 3.9+ (stdlib only, no `pip install` needed)
+- Python 3.9+
+- `pip install -r requirements.txt` (installs [`textual`](https://github.com/Textualize/textual) for the TUI)
 - [`sldl`](https://github.com/fiso64/slsk-batchdl) on your `PATH`
 - A Soulseek account (created automatically on first login — see below)
 
@@ -53,78 +54,62 @@ sudo chmod +x /usr/local/bin/sldl
    cd Spotify-to-Soulseek
    ```
 
-2. (Optional) Create a Soulseek account — there is no signup form. If you log in with a username that doesn't exist on the network, it's auto-created. So just pick any username/password on first run.
+2. Install the Python dependency (just `textual`):
+   ```bash
+   pip3 install -r requirements.txt
+   ```
+
+3. (Optional) Create a Soulseek account — there is no signup form. If you log in with a username that doesn't exist on the network, it's auto-created. So just pick any username/password on first run.
 
 ## Usage
 
-### Quick start
+### Launch the TUI (default)
 
 ```bash
 python3 spotify_to_soulseek.py
 ```
 
-You'll be prompted for:
+A full-screen terminal app opens. The flow:
 
-| Prompt | What to enter |
-|---|---|
-| Spotify playlist URL | A public playlist link, e.g. `https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M` |
-| Soulseek username | Pick anything (e.g. your name + a number). If new, the account is created automatically. |
-| Soulseek password | Pick anything. Save it somewhere — there is no password reset on Soulseek. |
-| Download directory | Press Enter for the default (`~/Music/Soulseek`) |
+1. **Settings** (first run only) — enter your Soulseek username, password, and download folder. Saved to `config.json` (mode `0600`, gitignored). Soulseek auto-creates accounts on first login, so any username + password works.
+2. **URL screen** — paste a public Spotify playlist URL. Press **Enter** or click *Fetch tracks*. If you've used the app before, the URL field pre-fills with your last playlist and a *Resume last session* button appears.
+3. **Track selection** — every track is shown as a checkbox, all selected by default. Use:
+   - `A` — select all
+   - `N` — deselect all
+   - click any checkbox to toggle
+   - `D` — start downloading
+   - `Esc` — back to the URL screen
+4. **Download screen** — live colored log of `sldl` output, with success lines in green and failures in red. Skipped (already-downloaded) tracks are noted.
+5. **After it finishes** — two retry options appear:
+   - `R` — **Retry**: re-run sldl on the same selection. Already-downloaded tracks are skipped automatically, so this only re-attempts misses.
+   - `Y` — **Retry + YouTube fallback**: same as above but adds `--yt-dlp` so tracks not found on Soulseek fall back to YouTube. Requires [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) installed (`brew install yt-dlp`).
 
-After the first run, your Soulseek credentials and download path are saved to `config.json` next to the script (mode `0600`). You won't be asked again. `config.json` is `.gitignore`d.
+Press **Ctrl+Q** anytime to quit.
 
-### Subsequent runs
+### Legacy CLI mode
 
-Just run it again — you'll only be asked for the playlist URL:
-
-```bash
-python3 spotify_to_soulseek.py
-```
-
-### Pass the URL inline
-
-Skip the prompt by passing the URL as an argument:
+The original non-interactive flow still works for scripting:
 
 ```bash
+# Pass URL as argument → uses CLI mode
 python3 spotify_to_soulseek.py "https://open.spotify.com/playlist/<id>"
+
+# Force CLI even without URL (prompts for one)
+python3 spotify_to_soulseek.py --cli
+
+# Preview tracks without downloading
+python3 spotify_to_soulseek.py --dry-run "https://open.spotify.com/playlist/<id>"
+
+# Override output directory
+python3 spotify_to_soulseek.py --out ~/Desktop/new-music "<url>"
 ```
 
-### Preview without downloading
+### Where do my settings live?
 
-`--dry-run` prints the parsed track list and exits without calling `sldl`. Useful for checking the playlist parses correctly:
-
-```bash
-python3 spotify_to_soulseek.py --dry-run
-```
-
-### Custom output directory
-
-Override the saved default for one run:
-
-```bash
-python3 spotify_to_soulseek.py --out ~/Desktop/new-music
-```
-
-### Pass extra flags through to `sldl`
-
-Any unrecognized arguments are forwarded to `sldl`. Useful examples:
-
-```bash
-# Prefer FLAC, fall back to MP3
-python3 spotify_to_soulseek.py --pref-format flac,mp3
-
-# Minimum 320 kbps bitrate
-python3 spotify_to_soulseek.py --min-bitrate 320
-
-# Run 4 downloads in parallel instead of 2
-python3 spotify_to_soulseek.py --concurrent-downloads 4
-
-# Verbose sldl logging
-python3 spotify_to_soulseek.py -v
-```
-
-Run `sldl --help` to see every available flag.
+| File | What's in it |
+|---|---|
+| `config.json` | Soulseek username/password + default download folder. Mode `0600`. Gitignored. Edit via the Settings screen. |
+| `state.json` | Last playlist URL, fetched track list, and which tracks you selected — used to power *Resume last session*. Gitignored. Delete it to start fresh. |
 
 ## Where do the files go?
 

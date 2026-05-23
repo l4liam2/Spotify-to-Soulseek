@@ -1,5 +1,6 @@
 # Local Soulseek credentials — never commit
 config.json
+state.json
 
 # Python
 __pycache__/
