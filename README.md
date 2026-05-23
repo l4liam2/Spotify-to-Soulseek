@@ -80,11 +80,12 @@ A full-screen terminal app opens. The flow:
    - `D` — start downloading
    - `Esc` — back to the URL screen
 4. **Download screen** — live colored log of `sldl` output, with success lines in green and failures in red. Skipped (already-downloaded) tracks are noted.
-5. **After it finishes** — two retry options appear:
+5. **While downloading** — press `C` (or click **Cancel**) to stop `sldl` immediately. SIGTERM is sent first; if `sldl` doesn't quit within 3 seconds, SIGKILL is sent.
+6. **After it finishes (or you cancel)** — two retry options appear:
    - `R` — **Retry**: re-run sldl on the same selection. Already-downloaded tracks are skipped automatically, so this only re-attempts misses.
    - `Y` — **Retry + YouTube fallback**: same as above but adds `--yt-dlp` so tracks not found on Soulseek fall back to YouTube. Requires [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) installed (`brew install yt-dlp`).
 
-Press **Ctrl+Q** anytime to quit.
+Press **Ctrl+Q** anytime to quit — any running `sldl` is killed as part of shutdown. Closing the terminal window or `kill`ing the Python process will also terminate `sldl` (signal handlers cover SIGTERM/SIGHUP/SIGINT).
 
 ### Legacy CLI mode
 

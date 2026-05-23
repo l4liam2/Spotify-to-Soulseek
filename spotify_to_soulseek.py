@@ -15,19 +15,57 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import atexit
 import csv
 import getpass
 import json
 import os
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
 import urllib.request
+import weakref
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
+
+
+# Track every sldl subprocess so we can guarantee they die when we do.
+_LIVE_PROCS: "weakref.WeakSet[subprocess.Popen]" = weakref.WeakSet()
+
+
+def _kill_all_children(_signum: int | None = None, _frame=None) -> None:
+    """Terminate all tracked sldl subprocesses. Idempotent."""
+    for proc in list(_LIVE_PROCS):
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+    # Give them a moment, then SIGKILL anything still alive.
+    for proc in list(_LIVE_PROCS):
+        try:
+            proc.wait(timeout=2)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    if _signum is not None:
+        # Re-raise the signal so the process exits with the conventional code.
+        signal.signal(_signum, signal.SIG_DFL)
+        os.kill(os.getpid(), _signum)
+
+
+atexit.register(_kill_all_children)
+for _sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+    try:
+        signal.signal(_sig, _kill_all_children)
+    except (ValueError, OSError):
+        pass  # Some signals can't be installed in non-main threads / Windows
 
 
 # ---------------------------------------------------------------------------
@@ -367,9 +405,10 @@ def run_tui() -> int:
     # ---- Download screen --------------------------------------------------
     class DownloadScreen(Screen):
         BINDINGS = [
-            Binding("escape", "app.pop_screen", "Back"),
+            Binding("escape", "back", "Back"),
             Binding("r", "retry", "Retry"),
             Binding("y", "retry_yt", "Retry + YouTube"),
+            Binding("c", "cancel", "Cancel download"),
         ]
 
         def __init__(self, tracks: list[Track], cfg: dict, extra: list[str] | None = None):
@@ -379,13 +418,16 @@ def run_tui() -> int:
             self.extra = extra or []
             self.return_code: int | None = None
             self.csv_path: Path | None = None
+            self.proc: subprocess.Popen | None = None
+            self.cancelled: bool = False
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=False)
             yield Static(f"Downloading {len(self.tracks)} tracks…", id="title")
-            yield Static("Tracks already downloaded are skipped automatically.", id="subtitle")
+            yield Static("Press C to cancel. Already-downloaded tracks are skipped.", id="subtitle")
             yield RichLog(id="log", highlight=True, markup=True, wrap=True)
             with Horizontal(classes="panel"):
+                yield Button("Cancel (kill sldl)", id="cancel", variant="error")
                 yield Button("Retry (skips done)", id="retry", disabled=True)
                 yield Button("Retry + YouTube fallback", id="retry_yt", disabled=True)
                 yield Button("Back to start", id="home", disabled=True)
@@ -433,6 +475,9 @@ def run_tui() -> int:
                 self.app.call_from_thread(self._finish, 127)
                 return
 
+            self.proc = proc
+            _LIVE_PROCS.add(proc)
+
             assert proc.stdout is not None
             for line in proc.stdout:
                 line = line.rstrip()
@@ -451,15 +496,49 @@ def run_tui() -> int:
         def _finish(self, rc: int) -> None:
             self.return_code = rc
             status = self.query_one("#status", Static)
-            if rc == 0:
+            if self.cancelled:
+                status.update("[err]✕ Cancelled.[/]")
+            elif rc == 0:
                 status.update("[ok]✓ Done.[/]")
             else:
                 status.update(f"[err]sldl exited with code {rc}.[/] Press R to retry.")
+            self.query_one("#cancel", Button).disabled = True
             for btn_id in ("retry", "retry_yt", "home"):
                 self.query_one(f"#{btn_id}", Button).disabled = False
 
         def action_retry(self) -> None: self._retry([])
         def action_retry_yt(self) -> None: self._retry(["--yt-dlp"])
+
+        def action_cancel(self) -> None:
+            self._cancel()
+
+        def action_back(self) -> None:
+            self._cancel()
+            self.app.pop_screen()
+
+        def _cancel(self) -> None:
+            """Hard-stop the sldl subprocess. Safe to call repeatedly."""
+            if self.cancelled:
+                return
+            self.cancelled = True
+            proc = self.proc
+            log = self.query_one("#log", RichLog)
+            if proc is None or proc.poll() is not None:
+                log.write("[err]Nothing to cancel.[/]")
+                return
+            log.write("[err]Cancelling — sending SIGTERM to sldl…[/]")
+            try:
+                proc.terminate()
+            except Exception as exc:
+                log.write(f"[err]terminate() failed: {exc}[/]")
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                log.write("[err]sldl ignored SIGTERM — sending SIGKILL.[/]")
+                try:
+                    proc.kill()
+                except Exception as exc:
+                    log.write(f"[err]kill() failed: {exc}[/]")
 
         def _retry(self, extra: list[str]) -> None:
             self.app.pop_screen()
@@ -468,7 +547,9 @@ def run_tui() -> int:
         def on_button_pressed(self, event: Button.Pressed) -> None:
             if event.button.id == "retry": self._retry([])
             elif event.button.id == "retry_yt": self._retry(["--yt-dlp"])
+            elif event.button.id == "cancel": self._cancel()
             elif event.button.id == "home":
+                self._cancel()
                 while len(self.app.screen_stack) > 1:
                     self.app.pop_screen()
 
