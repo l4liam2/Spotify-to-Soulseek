@@ -1,0 +1,17 @@
+# Local Soulseek credentials — never commit
+config.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# Editor
+.claude/
+.vscode/
+.idea/
