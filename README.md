@@ -79,7 +79,7 @@ A full-screen terminal app opens. The flow:
    - click any checkbox to toggle
    - `D` — start downloading
    - `Esc` — back to the URL screen
-4. **Download screen** — live colored log of `sldl` output, with success lines in green and failures in red. Skipped (already-downloaded) tracks are noted.
+4. **Download screen** — live progress bar with counters (`✓ done   ✕ failed   ↻ skipped`), a "now playing" line for the active track, and a colored log of `sldl` output (success green, failure red, skipped dimmed). Counters increment automatically as `sldl` reports each track's outcome.
 5. **While downloading** — press `C` (or click **Cancel**) to stop `sldl` immediately. SIGTERM is sent first; if `sldl` doesn't quit within 3 seconds, SIGKILL is sent.
 6. **After it finishes (or you cancel)** — two retry options appear:
    - `R` — **Retry**: re-run sldl on the same selection. Already-downloaded tracks are skipped automatically, so this only re-attempts misses.

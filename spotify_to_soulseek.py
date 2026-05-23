@@ -233,7 +233,8 @@ def run_tui() -> int:
         from textual.containers import Horizontal, Vertical, VerticalScroll
         from textual.screen import Screen
         from textual.widgets import (
-            Button, Checkbox, Footer, Header, Input, Label, RichLog, Static,
+            Button, Checkbox, Footer, Header, Input, Label, ProgressBar,
+            RichLog, Static,
         )
         from textual import work
     except ImportError:
@@ -254,6 +255,10 @@ def run_tui() -> int:
     .status { color: $text-muted; padding: 0 2; }
     .ok { color: $success; }
     .err { color: $error; }
+    #progress_box { height: auto; border: round $primary; margin: 1 2; padding: 0 1; }
+    #progress { width: 100%; padding: 0 1; }
+    #counters { content-align: center middle; padding: 0 1; }
+    #active { content-align: left middle; color: $text-muted; padding: 0 1; }
     """
 
     # ---- URL screen ------------------------------------------------------
@@ -420,11 +425,20 @@ def run_tui() -> int:
             self.csv_path: Path | None = None
             self.proc: subprocess.Popen | None = None
             self.cancelled: bool = False
+            # Progress state
+            self.total = len(tracks)
+            self.done = 0
+            self.failed = 0
+            self.skipped = 0
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=False)
             yield Static(f"Downloading {len(self.tracks)} tracks…", id="title")
             yield Static("Press C to cancel. Already-downloaded tracks are skipped.", id="subtitle")
+            with Vertical(id="progress_box"):
+                yield ProgressBar(total=self.total, id="progress", show_eta=False)
+                yield Static(self._counters_text(), id="counters")
+                yield Static("", id="active")
             yield RichLog(id="log", highlight=True, markup=True, wrap=True)
             with Horizontal(classes="panel"):
                 yield Button("Cancel (kill sldl)", id="cancel", variant="error")
@@ -433,6 +447,68 @@ def run_tui() -> int:
                 yield Button("Back to start", id="home", disabled=True)
             yield Static("", id="status", classes="status")
             yield Footer()
+
+        # --- progress helpers -------------------------------------------
+        def _counters_text(self) -> str:
+            processed = self.done + self.failed + self.skipped
+            return (
+                f"[b]{processed}/{self.total}[/]   "
+                f"[ok]✓ {self.done}[/]  "
+                f"[err]✕ {self.failed}[/]  "
+                f"[dim]↻ {self.skipped} skipped[/]"
+            )
+
+        def _tick(self, kind: str) -> None:
+            """Called on the main thread when a track reaches a final state."""
+            if kind == "done":
+                self.done += 1
+            elif kind == "failed":
+                self.failed += 1
+            elif kind == "skipped":
+                self.skipped += 1
+            processed = self.done + self.failed + self.skipped
+            try:
+                self.query_one("#progress", ProgressBar).update(progress=processed)
+                self.query_one("#counters", Static).update(self._counters_text())
+            except Exception:
+                pass  # widget may have been removed
+
+        def _set_active(self, label: str) -> None:
+            try:
+                self.query_one("#active", Static).update(f"▸ {label}")
+            except Exception:
+                pass
+
+        @staticmethod
+        def _classify_line(line: str) -> str | None:
+            """Return 'done' | 'failed' | 'skipped' | None for a sldl output line."""
+            low = line.lower()
+            # Success: 'succeeded:', 'downloaded', or a saved-path arrow
+            if (
+                "succeeded:" in low
+                or "✓" in line
+                or " downloaded:" in low
+                or "→ saved" in low
+                or low.startswith("downloaded ")
+            ):
+                return "done"
+            # Skipped already-existing tracks
+            if (
+                "already exists" in low
+                or low.startswith("skipped")
+                or "skipping " in low
+            ):
+                return "skipped"
+            # Failures and not-found
+            if (
+                "failed:" in low
+                or "no results" in low
+                or "no users have" in low
+                or "not found" in low
+                or "couldn't find" in low
+            ):
+                return "failed"
+            return None
 
         def on_mount(self) -> None:
             self._start()
@@ -479,16 +555,33 @@ def run_tui() -> int:
             _LIVE_PROCS.add(proc)
 
             assert proc.stdout is not None
+            active_re = re.compile(
+                r"^(?:searching|downloading|trying|now downloading)[: ]+(.+)$",
+                re.IGNORECASE,
+            )
             for line in proc.stdout:
                 line = line.rstrip()
                 if not line:
                     continue
+
+                # Update progress counters when a track reaches a terminal state.
+                kind = self._classify_line(line)
+                if kind:
+                    self.app.call_from_thread(self._tick, kind)
+
+                # Track the currently-active item (best-effort).
+                m = active_re.match(line)
+                if m:
+                    self.app.call_from_thread(self._set_active, m.group(1).strip())
+
+                # Style the log line.
                 styled = line
-                low = line.lower()
-                if "succ" in low or "downloaded" in low or "complete" in low:
+                if kind == "done":
                     styled = f"[ok]{line}[/]"
-                elif "fail" in low or "error" in low or "not found" in low:
+                elif kind == "failed":
                     styled = f"[err]{line}[/]"
+                elif kind == "skipped":
+                    styled = f"[dim]{line}[/]"
                 self.app.call_from_thread(log.write, styled)
             proc.wait()
             self.app.call_from_thread(self._finish, proc.returncode)
