@@ -283,11 +283,14 @@ def run_tui() -> int:
             except Exception as exc:
                 self.app.call_from_thread(msg.update, f"[err]Error: {exc}[/]")
                 return
-            self.app.call_from_thread(
-                self.app.push_screen,
-                TrackScreen(url=url, tracks=tracks),
-            )
-            self.app.call_from_thread(msg.update, f"Found {len(tracks)} tracks.")
+
+            # Screen must be constructed on the UI thread (Python 3.9 needs a
+            # running event loop to allocate the asyncio.Lock inside Widget).
+            def _push() -> None:
+                self.app.push_screen(TrackScreen(url=url, tracks=tracks))
+                msg.update(f"Found {len(tracks)} tracks.")
+
+            self.app.call_from_thread(_push)
 
     # ---- Track selection screen ------------------------------------------
     class TrackScreen(Screen):
